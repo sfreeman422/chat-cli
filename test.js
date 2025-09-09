@@ -1,99 +1,146 @@
-const { ChatCLI } = require('./chat.js');
-const fs = require('fs');
-const path = require('path');
-const os = require('os');
+#!/bin/bash
 
-// Mock OpenAI for testing
-const mockOpenAI = {
-  chat: {
-    completions: {
-      create: jest.fn()
-    }
-  }
-};
+# Test suite for chat-cli Bash implementation
 
-// Mock file operations for testing
-const TEST_STATE_FILE = path.join(os.tmpdir(), 'test-chat-state.json');
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
 
-describe('ChatCLI', () => {
-  let chatCLI;
+# Test counter
+TESTS_PASSED=0
+TESTS_FAILED=0
 
-  beforeEach(() => {
-    // Clear any existing test state file
-    if (fs.existsSync(TEST_STATE_FILE)) {
-      fs.unlinkSync(TEST_STATE_FILE);
-    }
+# Test state file for testing
+TEST_STATE_FILE="/tmp/test-chat-state-$$.json"
+
+# Function to run a test
+run_test() {
+    local test_name="$1"
+    local test_function="$2"
     
-    // Create a new ChatCLI instance with mocked OpenAI
-    chatCLI = new ChatCLI();
-    chatCLI.openai = mockOpenAI;
+    echo -n "Testing $test_name... "
     
-    // Override state file path for testing
-    const originalStateFile = require.cache[require.resolve('./chat.js')];
-    if (originalStateFile) {
-      // Mock the STATE_FILE constant for testing
-      chatCLI.STATE_FILE = TEST_STATE_FILE;
-    }
-  });
+    if $test_function 2>/dev/null; then
+        echo -e "${GREEN}PASS${NC}"
+        ((TESTS_PASSED++))
+        return 0
+    else
+        echo -e "${RED}FAIL${NC}"
+        ((TESTS_FAILED++))
+        return 1
+    fi
+}
 
-  afterEach(() => {
-    // Clean up test state file
-    if (fs.existsSync(TEST_STATE_FILE)) {
-      fs.unlinkSync(TEST_STATE_FILE);
-    }
-    jest.clearAllMocks();
-  });
+# Test: Check dependencies are available
+test_dependencies() {
+    command -v curl >/dev/null 2>&1 && command -v jq >/dev/null 2>&1
+}
 
-  test('should initialize with empty conversation history', () => {
-    expect(chatCLI.conversationHistory).toEqual([]);
-  });
+# Test: Chat script exists and is executable
+test_script_executable() {
+    [ -f "./chat" ] && [ -x "./chat" ]
+}
 
-  test('should start a new conversation', () => {
-    chatCLI.conversationHistory = [
-      { role: 'user', content: 'Hello' },
-      { role: 'assistant', content: 'Hi there!' }
-    ];
+# Test: Script shows usage when no arguments provided
+test_usage_output() {
+    local output
+    output=$(unset OPENAI_API_KEY; ./chat 2>&1 || true)
+    echo "$output" | grep -q "OPENAI_API_KEY environment variable is not set"
+}
+
+# Test: Script handles 'new' command without API key (should fail gracefully)
+test_new_command_no_api_key() {
+    local output
+    # Unset API key for this test
+    output=$(unset OPENAI_API_KEY; ./chat new 2>&1 || true)
+    echo "$output" | grep -q "OPENAI_API_KEY environment variable is not set"
+}
+
+# Test: JSON state file operations
+test_json_operations() {
+    # Test creating empty conversation history
+    echo "[]" > "$TEST_STATE_FILE"
     
-    chatCLI.newConversation();
+    # Test adding a message to history
+    local history
+    history=$(cat "$TEST_STATE_FILE")
+    local new_history
+    new_history=$(echo "$history" | jq '. += [{"role": "user", "content": "test message"}]')
     
-    expect(chatCLI.conversationHistory).toEqual([]);
-  });
+    # Check if message was added correctly
+    local message_count
+    message_count=$(echo "$new_history" | jq 'length')
+    [ "$message_count" -eq 1 ]
+}
 
-  test('should return correct conversation length', () => {
-    chatCLI.conversationHistory = [
-      { role: 'user', content: 'Hello' },
-      { role: 'assistant', content: 'Hi there!' }
-    ];
+# Test: State file creation and cleanup
+test_state_file_operations() {
+    # Create test state file
+    echo "[]" > "$TEST_STATE_FILE"
+    [ -f "$TEST_STATE_FILE" ]
     
-    expect(chatCLI.getConversationLength()).toBe(2);
-  });
+    # Clean up
+    rm -f "$TEST_STATE_FILE"
+    [ ! -f "$TEST_STATE_FILE" ]
+}
 
-  test('should handle API response correctly', async () => {
-    const mockResponse = {
-      choices: [
-        {
-          message: {
-            content: 'Hello! How can I help you today?'
-          }
-        }
-      ]
-    };
+# Test: Conversation length calculation
+test_conversation_length() {
+    # Create test conversation with 2 messages
+    local history='[{"role": "user", "content": "Hello"}, {"role": "assistant", "content": "Hi there!"}]'
+    local length
+    length=$(echo "$history" | jq 'length')
+    [ "$length" -eq 2 ]
+}
 
-    mockOpenAI.chat.completions.create.mockResolvedValue(mockResponse);
+# Test: Message escaping for JSON
+test_message_escaping() {
+    local message='Hello "world" with quotes and \backslashes'
+    local escaped
+    escaped=$(echo "$message" | jq -R .)
+    # Should be properly escaped JSON string
+    echo "$escaped" | jq -r . >/dev/null 2>&1
+}
 
-    const response = await chatCLI.sendMessage('Hello');
+# Clean up function
+cleanup() {
+    rm -f "$TEST_STATE_FILE"
+}
 
-    expect(response).toBe('Hello! How can I help you today?');
-    expect(chatCLI.conversationHistory).toHaveLength(2);
-    expect(chatCLI.conversationHistory[0]).toEqual({
-      role: 'user',
-      content: 'Hello'
-    });
-    expect(chatCLI.conversationHistory[1]).toEqual({
-      role: 'assistant', 
-      content: 'Hello! How can I help you today?'
-    });
-  });
-});
+# Set up cleanup trap
+trap cleanup EXIT
 
-console.log('Basic ChatCLI tests would pass with a proper test runner like Jest.');
+# Main test execution
+main() {
+    echo -e "${BLUE}🧪 Running chat-cli Bash tests...${NC}"
+    echo
+    
+    # Run tests
+    run_test "dependencies available" test_dependencies
+    run_test "script exists and executable" test_script_executable
+    run_test "usage output" test_usage_output
+    run_test "new command without API key" test_new_command_no_api_key
+    run_test "JSON operations" test_json_operations
+    run_test "state file operations" test_state_file_operations
+    run_test "conversation length calculation" test_conversation_length
+    run_test "message escaping" test_message_escaping
+    
+    echo
+    echo -e "${BLUE}Test Results:${NC}"
+    echo -e "${GREEN}Passed: $TESTS_PASSED${NC}"
+    echo -e "${RED}Failed: $TESTS_FAILED${NC}"
+    
+    if [ $TESTS_FAILED -eq 0 ]; then
+        echo -e "${GREEN}🎉 All tests passed!${NC}"
+        return 0
+    else
+        echo -e "${RED}❌ Some tests failed!${NC}"
+        return 1
+    fi
+}
+
+# Run main function
+main "$@"

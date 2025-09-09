@@ -4,32 +4,52 @@
 
 echo "🚀 Installing chat-cli..."
 
-# Check if Node.js is installed
-if ! command -v node &> /dev/null; then
-    echo "❌ Node.js is not installed. Please install Node.js first."
-    echo "   Visit: https://nodejs.org/"
+# Check if curl is installed
+if ! command -v curl &> /dev/null; then
+    echo "❌ curl is not installed. Please install curl first."
+    echo "   Ubuntu/Debian: sudo apt-get install curl"
+    echo "   macOS: brew install curl (usually pre-installed)"
+    echo "   CentOS/RHEL: sudo yum install curl"
     exit 1
 fi
 
-# Check if npm is installed
-if ! command -v npm &> /dev/null; then
-    echo "❌ npm is not installed. Please install npm first."
+# Check if jq is installed
+if ! command -v jq &> /dev/null; then
+    echo "❌ jq is not installed. Please install jq first."
+    echo "   Ubuntu/Debian: sudo apt-get install jq"
+    echo "   macOS: brew install jq"
+    echo "   CentOS/RHEL: sudo yum install jq"
     exit 1
 fi
 
-# Install dependencies
-echo "📦 Installing dependencies..."
-npm install
+echo "✅ Dependencies (curl, jq) are installed!"
+
+# Make chat script executable
+chmod +x chat
 
 # Install globally (optional)
 read -p "🌍 Do you want to install chat-cli globally? (y/n): " -n 1 -r
 echo
 if [[ $REPLY =~ ^[Yy]$ ]]; then
     echo "🔧 Installing globally..."
-    npm install -g .
-    echo "✅ chat-cli installed globally! You can now use 'chat' from anywhere."
+    
+    # Check if we can write to /usr/local/bin
+    if [ -w "/usr/local/bin" ] || sudo -n true 2>/dev/null; then
+        if [ -w "/usr/local/bin" ]; then
+            cp chat /usr/local/bin/chat
+        else
+            sudo cp chat /usr/local/bin/chat
+        fi
+        echo "✅ chat-cli installed globally! You can now use 'chat' from anywhere."
+    else
+        echo "⚠️  Cannot install globally without sudo permissions."
+        echo "   Run with sudo or add the current directory to your PATH:"
+        echo "   export PATH=\$PATH:$(pwd)"
+        echo "   Add this to your shell profile (~/.bashrc, ~/.zshrc) to persist."
+    fi
 else
-    echo "ℹ️  To use chat-cli, run: node chat.js"
+    echo "ℹ️  To use chat-cli, run: ./chat"
+    echo "   Or add this directory to your PATH: export PATH=\$PATH:$(pwd)"
 fi
 
 # Check for OpenAI API key

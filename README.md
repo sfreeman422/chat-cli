@@ -1,6 +1,6 @@
 # chat-cli
 
-A simple command-line interface for chatting with ChatGPT. This tool allows you to have continuous conversations with OpenAI's ChatGPT directly from your terminal.
+A simple command-line interface for chatting with ChatGPT. This tool allows you to have continuous conversations with OpenAI's ChatGPT directly from your terminal using pure Bash.
 
 ## Features
 
@@ -9,6 +9,13 @@ A simple command-line interface for chatting with ChatGPT. This tool allows you 
 - 🔐 **Environment-based authentication**: Uses OpenAI API key from environment variables
 - 💾 **Conversation persistence**: Saves conversation history locally
 - ⚡ **Simple usage**: Easy-to-remember commands
+- 🐚 **Pure Bash**: No Node.js dependency - works with standard Unix tools
+
+## Requirements
+
+- **curl** - for making HTTP requests to OpenAI API
+- **jq** - for JSON processing
+- **OpenAI API key** - for accessing ChatGPT
 
 ## Installation
 
@@ -20,7 +27,14 @@ cd chat-cli
 
 2. Install dependencies:
 ```bash
-npm install
+# Ubuntu/Debian
+sudo apt-get install curl jq
+
+# macOS (using Homebrew)
+brew install curl jq
+
+# CentOS/RHEL
+sudo yum install curl jq
 ```
 
 3. Set up your OpenAI API key:
@@ -28,10 +42,12 @@ npm install
 export OPENAI_API_KEY="your-openai-api-key-here"
 ```
 
-4. (Optional) Install globally for system-wide access:
+4. Run the installation script:
 ```bash
-npm install -g .
+./install.sh
 ```
+
+This will check dependencies and optionally install the `chat` command globally.
 
 ## Usage
 
@@ -77,12 +93,13 @@ You can get an API key from [OpenAI's website](https://platform.openai.com/api-k
 - **Error Handling**: Proper error messages for API issues, rate limits, and missing API keys
 - **Conversation Context**: Each message maintains the full conversation context
 - **Fresh Conversations**: Use `chat new` to start over
+- **Colorized Output**: Easy-to-read colored terminal output
 
-## Requirements
+## Dependencies
 
-- Node.js (version 14 or higher)
-- OpenAI API key
-- Internet connection
+- **curl**: For making HTTP requests to the OpenAI API
+- **jq**: For JSON parsing and manipulation
+- **bash**: Standard on most Unix-like systems
 
 ## License
 

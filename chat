@@ -1,0 +1,232 @@
+#!/bin/bash
+
+# Chat CLI - A Bash-based ChatGPT CLI tool
+# Usage: chat "your message here" | chat new
+
+set -e
+
+# Configuration
+STATE_FILE="$HOME/.chat-cli-state.json"
+OPENAI_API_URL="https://api.openai.com/v1/chat/completions"
+MODEL="gpt-3.5-turbo"
+MAX_TOKENS=1000
+TEMPERATURE=0.7
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+# Check dependencies
+check_dependencies() {
+    local missing_deps=()
+    
+    if ! command -v curl &> /dev/null; then
+        missing_deps+=("curl")
+    fi
+    
+    if ! command -v jq &> /dev/null; then
+        missing_deps+=("jq")
+    fi
+    
+    if [ ${#missing_deps[@]} -ne 0 ]; then
+        echo -e "${RED}Error: Missing required dependencies: ${missing_deps[*]}${NC}" >&2
+        echo -e "${YELLOW}Please install them using:${NC}" >&2
+        echo "  Ubuntu/Debian: sudo apt-get install curl jq" >&2
+        echo "  macOS: brew install curl jq" >&2
+        echo "  CentOS/RHEL: sudo yum install curl jq" >&2
+        exit 1
+    fi
+}
+
+# Check for API key
+check_api_key() {
+    if [ -z "$OPENAI_API_KEY" ]; then
+        echo -e "${RED}Error: OPENAI_API_KEY environment variable is not set.${NC}" >&2
+        echo -e "${YELLOW}Please set it using: export OPENAI_API_KEY=\"your-api-key-here\"${NC}" >&2
+        exit 1
+    fi
+}
+
+# Load conversation history from state file
+load_conversation_history() {
+    if [ -f "$STATE_FILE" ]; then
+        cat "$STATE_FILE" 2>/dev/null || echo "[]"
+    else
+        echo "[]"
+    fi
+}
+
+# Save conversation history to state file
+save_conversation_history() {
+    local history="$1"
+    echo "$history" > "$STATE_FILE" 2>/dev/null || {
+        echo -e "${YELLOW}Warning: Could not save conversation history${NC}" >&2
+    }
+}
+
+# Add message to conversation history
+add_to_history() {
+    local history="$1"
+    local role="$2"
+    local content="$3"
+    
+    # Escape content for JSON
+    local escaped_content
+    escaped_content=$(echo "$content" | jq -R .)
+    
+    # Add new message to history
+    echo "$history" | jq --arg role "$role" --argjson content "$escaped_content" '. += [{"role": $role, "content": $content}]'
+}
+
+# Get conversation length (number of exchanges)
+get_conversation_length() {
+    local history="$1"
+    echo "$history" | jq 'length'
+}
+
+# Start new conversation
+new_conversation() {
+    echo "[]" > "$STATE_FILE" 2>/dev/null || {
+        echo -e "${YELLOW}Warning: Could not save new conversation state${NC}" >&2
+    }
+    echo -e "${GREEN}Started a new conversation.${NC}"
+}
+
+# Send message to OpenAI API
+send_message() {
+    local message="$1"
+    local history="$2"
+    
+    # Add user message to history
+    history=$(add_to_history "$history" "user" "$message")
+    
+    # Prepare API request payload
+    local payload
+    payload=$(jq -n \
+        --arg model "$MODEL" \
+        --argjson messages "$history" \
+        --argjson max_tokens "$MAX_TOKENS" \
+        --argjson temperature "$TEMPERATURE" \
+        '{
+            model: $model,
+            messages: $messages,
+            max_tokens: $max_tokens,
+            temperature: $temperature
+        }')
+    
+    # Make API request
+    local response
+    response=$(curl -s -w "%{http_code}" \
+        -H "Content-Type: application/json" \
+        -H "Authorization: Bearer $OPENAI_API_KEY" \
+        -d "$payload" \
+        "$OPENAI_API_URL")
+    
+    # Extract HTTP status code and response body
+    local http_code="${response: -3}"
+    local response_body="${response%???}"
+    
+    # Handle different HTTP status codes
+    case "$http_code" in
+        200)
+            # Success - extract assistant's response
+            local assistant_message
+            assistant_message=$(echo "$response_body" | jq -r '.choices[0].message.content')
+            
+            if [ "$assistant_message" == "null" ] || [ -z "$assistant_message" ]; then
+                echo -e "${RED}Error: Invalid response from OpenAI API${NC}" >&2
+                exit 1
+            fi
+            
+            # Add assistant response to history
+            history=$(add_to_history "$history" "assistant" "$assistant_message")
+            
+            # Save updated conversation history
+            save_conversation_history "$history"
+            
+            # Output the response
+            echo
+            echo "$assistant_message"
+            
+            # Show conversation length
+            local length
+            length=$(get_conversation_length "$history")
+            if [ "$length" -gt 2 ]; then
+                local exchanges=$((length / 2))
+                echo
+                echo -e "${BLUE}(Conversation has $exchanges exchanges)${NC}"
+            fi
+            ;;
+        401)
+            echo -e "${RED}Error: Invalid OpenAI API key. Please check your OPENAI_API_KEY environment variable.${NC}" >&2
+            exit 1
+            ;;
+        429)
+            echo -e "${RED}Error: Rate limit exceeded. Please try again later.${NC}" >&2
+            exit 1
+            ;;
+        *)
+            local error_message
+            error_message=$(echo "$response_body" | jq -r '.error.message // "Unknown error"' 2>/dev/null || echo "Unknown error")
+            echo -e "${RED}Error: OpenAI API error (HTTP $http_code): $error_message${NC}" >&2
+            exit 1
+            ;;
+    esac
+}
+
+# Show usage information
+show_usage() {
+    echo "Usage:"
+    echo "  chat \"your message here\"  - Send a message to ChatGPT"
+    echo "  chat new                  - Start a new conversation"
+    echo
+    echo "Examples:"
+    echo "  chat \"Hello, how are you?\""
+    echo "  chat \"What's the weather like?\""
+    echo "  chat new"
+}
+
+# Main function
+main() {
+    # Check dependencies and API key
+    check_dependencies
+    check_api_key
+    
+    # Parse command line arguments
+    if [ $# -eq 0 ]; then
+        echo -e "${RED}Error: Please provide a message to send.${NC}" >&2
+        show_usage >&2
+        exit 1
+    fi
+    
+    # Handle 'new' command
+    if [ "$1" == "new" ]; then
+        new_conversation
+        return 0
+    fi
+    
+    # Join all arguments as the message
+    local message="$*"
+    
+    if [ -z "$message" ]; then
+        echo -e "${RED}Error: Please provide a message to send.${NC}" >&2
+        show_usage >&2
+        exit 1
+    fi
+    
+    # Load conversation history
+    local history
+    history=$(load_conversation_history)
+    
+    # Show thinking indicator
+    echo -e "${BLUE}Thinking...${NC}"
+    
+    # Send message to ChatGPT
+    send_message "$message" "$history"
+}
+
+# Run main function with all arguments
+main "$@"
