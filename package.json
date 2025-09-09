@@ -1,12 +1,15 @@
 {
   "name": "chat-cli",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "description": "A CLI tool for chatting with ChatGPT",
+  "main": "chat.js",
+  "bin": {
+    "chat": "./chat.js"
+  },
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
   },
-  "keywords": [],
+  "keywords": ["chat", "cli", "openai", "chatgpt"],
   "author": "",
   "license": "ISC",
   "dependencies": {
