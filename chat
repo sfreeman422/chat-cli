@@ -12,9 +12,7 @@ METADATA_FILE="$CHAT_CLI_DIR/metadata.json"
 CURRENT_FILE="$CHAT_CLI_DIR/current"
 LEGACY_STATE_FILE="$HOME/.chat-cli-state.json"
 OPENAI_API_URL="https://api.openai.com/v1/chat/completions"
-MODEL="gpt-3.5-turbo"
-MAX_TOKENS=1000
-TEMPERATURE=0.7
+MODEL="gpt-4.1-nano"
 
 # Colors for output
 RED='\033[0;31m'
@@ -209,13 +207,7 @@ add_to_history() {
     local history="$1"
     local role="$2"
     local content="$3"
-    
-    # Escape content for JSON
-    local escaped_content
-    escaped_content=$(echo "$content" | jq -R .)
-    
-    # Add new message to history
-    echo "$history" | jq --arg role "$role" --argjson content "$escaped_content" '. += [{"role": $role, "content": $content}]'
+    echo "$history" | jq --arg role "$role" --arg content "$content" '. += [{"role": $role, "content": $content}]'
 }
 
 # Get conversation length (number of exchanges)
@@ -402,20 +394,16 @@ send_message() {
     fi
     
     # Add user message to history
-    history=$(add_to_history "$history" "user" "$message")
-    
+    history=$(add_to_history "$history" "user" "$message")    
     # Prepare API request payload
     local payload
+
     payload=$(jq -n \
         --arg model "$MODEL" \
         --argjson messages "$history" \
-        --argjson max_tokens "$MAX_TOKENS" \
-        --argjson temperature "$TEMPERATURE" \
         '{
             model: $model,
             messages: $messages,
-            max_tokens: $max_tokens,
-            temperature: $temperature
         }')
     
     # Make API request
