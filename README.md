@@ -5,9 +5,13 @@ A simple command-line interface for chatting with ChatGPT. This tool allows you 
 ## Features
 
 - 🗣️ **Continuous conversations**: Maintains conversation context across multiple messages
-- 🔄 **New conversation support**: Start fresh conversations anytime
+- 📝 **Multiple conversations**: Create and manage multiple named conversations
+- 🔍 **Conversation history**: List and search through previous conversations
+- 🔄 **New conversation support**: Start fresh conversations with optional titles
+- 💾 **Load previous conversations**: Resume any previous conversation by title or ID
+- 🏷️ **Conversation management**: Save conversations with custom titles
 - 🔐 **Environment-based authentication**: Uses OpenAI API key from environment variables
-- 💾 **Conversation persistence**: Saves conversation history locally
+- 💾 **Conversation persistence**: Saves all conversations locally with metadata
 - ⚡ **Simple usage**: Easy-to-remember commands
 - 🐚 **Pure Bash**: No Node.js dependency - works with standard Unix tools
 
@@ -59,21 +63,47 @@ chat "where is the nearest pub"
 ### Start a new conversation
 ```bash
 chat new
+# or with a custom title
+chat new "Python Help Session"
 ```
 
-### Examples
+### List all previous conversations
 ```bash
-# Ask a question
-chat "What's the weather like today?"
+chat list
+```
 
-# Continue the conversation
-chat "What about tomorrow?"
+### Load and continue a previous conversation
+```bash
+chat load "Python Help Session"
+# or by partial title match
+chat load "python"
+```
 
-# Start a fresh conversation
-chat new
+### Save current conversation with a new title
+```bash
+chat save "My Important Discussion"
+```
 
-# Ask a new question
-chat "Explain quantum computing in simple terms"
+### Complete workflow examples
+```bash
+# Start a conversation with a title
+chat new "Learning JavaScript"
+chat "What are closures in JavaScript?"
+chat "Can you give me an example?"
+
+# Save it with a descriptive title
+chat save "JavaScript Closures Tutorial"
+
+# Start another conversation
+chat new "Recipe Ideas"
+chat "Give me a healthy dinner recipe"
+
+# List all conversations
+chat list
+
+# Go back to the JavaScript conversation
+chat load "JavaScript"
+chat "What about arrow functions?"
 ```
 
 ## Configuration
@@ -89,11 +119,38 @@ You can get an API key from [OpenAI's website](https://platform.openai.com/api-k
 
 ## Features
 
-- **Conversation History**: Conversations are saved in `~/.chat-cli-state.json`
+- **Multiple Conversations**: Create and manage multiple named conversations that can be referenced later
+- **Conversation History**: List all previous conversations with titles, creation dates, and last updated times
+- **Conversation Loading**: Resume any previous conversation by title or ID
+- **Auto-titling**: Conversations are automatically titled based on the first message, or you can provide custom titles
+- **Conversation Search**: Load conversations by partial title matching (case-insensitive)
+- **Conversation Management**: Save current conversations with new titles
+- **Legacy Migration**: Automatically migrates old single-conversation format to new multi-conversation structure
+- **Conversation Context**: Each message maintains the full conversation context within the selected conversation
+- **Fresh Conversations**: Use `chat new` to start over with a clean slate
+- **Colorized Output**: Easy-to-read colored terminal output with conversation indicators
 - **Error Handling**: Proper error messages for API issues, rate limits, and missing API keys
-- **Conversation Context**: Each message maintains the full conversation context
-- **Fresh Conversations**: Use `chat new` to start over
-- **Colorized Output**: Easy-to-read colored terminal output
+
+## Command Reference
+
+| Command | Description | Example |
+|---------|-------------|---------|
+| `chat "message"` | Send a message to ChatGPT | `chat "Explain quantum physics"` |
+| `chat new` | Start a new conversation | `chat new` |
+| `chat new "title"` | Start a new conversation with title | `chat new "Python Learning"` |
+| `chat list` | List all conversations | `chat list` |
+| `chat load "title"` | Load conversation by title | `chat load "Python Learning"` |
+| `chat load "partial"` | Load by partial title match | `chat load "python"` |
+| `chat save "title"` | Save current conversation with new title | `chat save "Important Chat"` |
+
+## Storage
+
+Conversations are stored in `~/.chat-cli/`:
+- `conversations/` - Individual conversation files (JSON format)
+- `metadata.json` - Conversation metadata (titles, timestamps)
+- `current` - Tracks which conversation is currently active
+
+The tool automatically migrates from the old `~/.chat-cli-state.json` format if found.
 
 ## Dependencies
 

@@ -6,7 +6,11 @@
 set -e
 
 # Configuration
-STATE_FILE="$HOME/.chat-cli-state.json"
+CHAT_CLI_DIR="$HOME/.chat-cli"
+CONVERSATIONS_DIR="$CHAT_CLI_DIR/conversations"
+METADATA_FILE="$CHAT_CLI_DIR/metadata.json"
+CURRENT_FILE="$CHAT_CLI_DIR/current"
+LEGACY_STATE_FILE="$HOME/.chat-cli-state.json"
 OPENAI_API_URL="https://api.openai.com/v1/chat/completions"
 MODEL="gpt-3.5-turbo"
 MAX_TOKENS=1000
@@ -50,21 +54,154 @@ check_api_key() {
     fi
 }
 
-# Load conversation history from state file
+# Initialize chat-cli directory structure
+init_chat_cli_dir() {
+    mkdir -p "$CONVERSATIONS_DIR"
+    
+    # Initialize metadata file if it doesn't exist
+    if [ ! -f "$METADATA_FILE" ]; then
+        echo "{}" > "$METADATA_FILE"
+    fi
+    
+    # Migrate legacy state file if it exists
+    migrate_legacy_state
+}
+
+# Migrate from legacy single-file format
+migrate_legacy_state() {
+    if [ -f "$LEGACY_STATE_FILE" ]; then
+        local legacy_content
+        legacy_content=$(cat "$LEGACY_STATE_FILE" 2>/dev/null || echo "[]")
+        
+        # Only migrate if there's actual conversation content
+        local length
+        length=$(echo "$legacy_content" | jq 'length' 2>/dev/null || echo "0")
+        
+        if [ "$length" -gt 0 ]; then
+            local timestamp
+            timestamp=$(date +%s)
+            local conversation_id="migrated_$timestamp"
+            local title="Migrated Conversation"
+            
+            # Save the conversation
+            echo "$legacy_content" > "$CONVERSATIONS_DIR/$conversation_id.json"
+            
+            # Update metadata
+            local metadata
+            metadata=$(cat "$METADATA_FILE" 2>/dev/null || echo "{}")
+            metadata=$(echo "$metadata" | jq --arg id "$conversation_id" --arg title "$title" --argjson timestamp "$timestamp" \
+                '. += {($id): {"title": $title, "created": $timestamp, "updated": $timestamp}}')
+            echo "$metadata" > "$METADATA_FILE"
+            
+            # Set as current conversation
+            echo "$conversation_id" > "$CURRENT_FILE"
+            
+            echo -e "${YELLOW}Migrated previous conversation to new format as '$title'${NC}"
+        fi
+        
+        # Remove legacy file
+        rm -f "$LEGACY_STATE_FILE"
+    fi
+}
+
+# Generate unique conversation ID
+generate_conversation_id() {
+    local timestamp=$(date +%s)
+    local random=$(tr -dc 'a-z0-9' < /dev/urandom | head -c 6)
+    echo "${timestamp}_${random}"
+}
+
+# Get current conversation ID
+get_current_conversation_id() {
+    if [ -f "$CURRENT_FILE" ]; then
+        cat "$CURRENT_FILE" 2>/dev/null
+    else
+        echo ""
+    fi
+}
+
+# Set current conversation ID
+set_current_conversation_id() {
+    local conversation_id="$1"
+    echo "$conversation_id" > "$CURRENT_FILE"
+}
+
+# Get conversation title by ID
+get_conversation_title() {
+    local conversation_id="$1"
+    local metadata
+    metadata=$(cat "$METADATA_FILE" 2>/dev/null || echo "{}")
+    echo "$metadata" | jq -r --arg id "$conversation_id" '.[$id].title // "Untitled"'
+}
+
+# Generate title from first message
+generate_title_from_message() {
+    local message="$1"
+    # Take first 50 characters and clean up
+    local title
+    title=$(echo "$message" | head -c 50 | tr '\n' ' ' | sed 's/[^a-zA-Z0-9 ]//g' | sed 's/  */ /g' | sed 's/^ *//;s/ *$//')
+    
+    if [ ${#title} -lt 5 ]; then
+        title="Chat $(date '+%Y-%m-%d %H:%M')"
+    fi
+    
+    echo "$title"
+}
+
+# Update conversation metadata
+update_conversation_metadata() {
+    local conversation_id="$1"
+    local title="$2"
+    local timestamp=$(date +%s)
+    
+    local metadata
+    metadata=$(cat "$METADATA_FILE" 2>/dev/null || echo "{}")
+    
+    # Check if conversation exists in metadata
+    local exists
+    exists=$(echo "$metadata" | jq --arg id "$conversation_id" 'has($id)')
+    
+    if [ "$exists" = "true" ]; then
+        # Update existing entry
+        metadata=$(echo "$metadata" | jq --arg id "$conversation_id" --argjson timestamp "$timestamp" \
+            '.[$id].updated = $timestamp')
+    else
+        # Create new entry
+        metadata=$(echo "$metadata" | jq --arg id "$conversation_id" --arg title "$title" --argjson timestamp "$timestamp" \
+            '. += {($id): {"title": $title, "created": $timestamp, "updated": $timestamp}}')
+    fi
+    
+    echo "$metadata" > "$METADATA_FILE"
+}
+
+# Load conversation history from current conversation file
 load_conversation_history() {
-    if [ -f "$STATE_FILE" ]; then
-        cat "$STATE_FILE" 2>/dev/null || echo "[]"
+    local conversation_id
+    conversation_id=$(get_current_conversation_id)
+    
+    if [ -n "$conversation_id" ] && [ -f "$CONVERSATIONS_DIR/$conversation_id.json" ]; then
+        cat "$CONVERSATIONS_DIR/$conversation_id.json" 2>/dev/null || echo "[]"
     else
         echo "[]"
     fi
 }
 
-# Save conversation history to state file
+# Save conversation history to current conversation file
 save_conversation_history() {
     local history="$1"
-    echo "$history" > "$STATE_FILE" 2>/dev/null || {
-        echo -e "${YELLOW}Warning: Could not save conversation history${NC}" >&2
-    }
+    local conversation_id
+    conversation_id=$(get_current_conversation_id)
+    
+    if [ -n "$conversation_id" ]; then
+        echo "$history" > "$CONVERSATIONS_DIR/$conversation_id.json" 2>/dev/null || {
+            echo -e "${YELLOW}Warning: Could not save conversation history${NC}" >&2
+        }
+        
+        # Update metadata timestamp
+        local title
+        title=$(get_conversation_title "$conversation_id")
+        update_conversation_metadata "$conversation_id" "$title"
+    fi
 }
 
 # Add message to conversation history
@@ -89,16 +226,180 @@ get_conversation_length() {
 
 # Start new conversation
 new_conversation() {
-    echo "[]" > "$STATE_FILE" 2>/dev/null || {
-        echo -e "${YELLOW}Warning: Could not save new conversation state${NC}" >&2
+    local title="$1"
+    
+    # Generate new conversation ID
+    local conversation_id
+    conversation_id=$(generate_conversation_id)
+    
+    # Create empty conversation file
+    echo "[]" > "$CONVERSATIONS_DIR/$conversation_id.json" 2>/dev/null || {
+        echo -e "${YELLOW}Warning: Could not create new conversation file${NC}" >&2
+        return 1
     }
-    echo -e "${GREEN}Started a new conversation.${NC}"
+    
+    # Set as current conversation
+    set_current_conversation_id "$conversation_id"
+    
+    # Generate title if not provided
+    if [ -z "$title" ]; then
+        title="Chat $(date '+%Y-%m-%d %H:%M')"
+    fi
+    
+    # Update metadata
+    update_conversation_metadata "$conversation_id" "$title"
+    
+    echo -e "${GREEN}Started new conversation: '$title'${NC}"
+}
+
+# List all conversations
+list_conversations() {
+    local metadata
+    metadata=$(cat "$METADATA_FILE" 2>/dev/null || echo "{}")
+    
+    local current_id
+    current_id=$(get_current_conversation_id)
+    
+    echo -e "${BLUE}📝 Previous Conversations:${NC}"
+    echo
+    
+    # Check if there are any conversations
+    local count
+    count=$(echo "$metadata" | jq 'length')
+    
+    if [ "$count" -eq 0 ]; then
+        echo -e "${YELLOW}No conversations found. Start one with: chat \"your message\"${NC}"
+        return 0
+    fi
+    
+    # Sort conversations by updated timestamp (newest first)
+    echo "$metadata" | jq -r '
+        to_entries | 
+        sort_by(.value.updated) | 
+        reverse | 
+        .[] | 
+        "\(.key)|\(.value.title)|\(.value.created)|\(.value.updated)"
+    ' | while IFS='|' read -r id title created updated; do
+        local created_date
+        created_date=$(date -d "@$created" "+%Y-%m-%d %H:%M" 2>/dev/null || date -r "$created" "+%Y-%m-%d %H:%M")
+        
+        local updated_date
+        updated_date=$(date -d "@$updated" "+%Y-%m-%d %H:%M" 2>/dev/null || date -r "$updated" "+%Y-%m-%d %H:%M")
+        
+        # Mark current conversation
+        local current_marker=""
+        if [ "$id" = "$current_id" ]; then
+            current_marker="→ "
+        fi
+        
+        echo -e "${current_marker}${GREEN}$title${NC}"
+        echo -e "   ID: $id"
+        echo -e "   Created: $created_date"
+        echo -e "   Updated: $updated_date"
+        echo
+    done
+}
+
+# Load a specific conversation
+load_conversation() {
+    local search_term="$1"
+    
+    if [ -z "$search_term" ]; then
+        echo -e "${RED}Error: Please specify a conversation title or ID to load${NC}" >&2
+        return 1
+    fi
+    
+    local metadata
+    metadata=$(cat "$METADATA_FILE" 2>/dev/null || echo "{}")
+    
+    # Try to find conversation by exact ID first
+    local found_id
+    found_id=$(echo "$metadata" | jq -r --arg search "$search_term" 'to_entries[] | select(.key == $search) | .key')
+    
+    # If not found by ID, try to find by title (case-insensitive partial match)
+    if [ -z "$found_id" ]; then
+        found_id=$(echo "$metadata" | jq -r --arg search "$search_term" '
+            to_entries[] | 
+            select(.value.title | ascii_downcase | contains($search | ascii_downcase)) | 
+            .key' | head -n 1)
+    fi
+    
+    if [ -z "$found_id" ]; then
+        echo -e "${RED}Error: No conversation found matching '$search_term'${NC}" >&2
+        echo -e "${YELLOW}Use 'chat list' to see available conversations${NC}" >&2
+        return 1
+    fi
+    
+    # Check if conversation file exists
+    if [ ! -f "$CONVERSATIONS_DIR/$found_id.json" ]; then
+        echo -e "${RED}Error: Conversation file not found for ID '$found_id'${NC}" >&2
+        return 1
+    fi
+    
+    # Set as current conversation
+    set_current_conversation_id "$found_id"
+    
+    local title
+    title=$(get_conversation_title "$found_id")
+    echo -e "${GREEN}Loaded conversation: '$title'${NC}"
+    
+    # Show conversation length
+    local history
+    history=$(load_conversation_history)
+    local length
+    length=$(get_conversation_length "$history")
+    
+    if [ "$length" -gt 0 ]; then
+        local exchanges=$((length / 2))
+        echo -e "${BLUE}(Conversation has $exchanges exchanges)${NC}"
+    fi
+}
+
+# Save current conversation with a new title
+save_conversation_with_title() {
+    local new_title="$1"
+    
+    if [ -z "$new_title" ]; then
+        echo -e "${RED}Error: Please specify a title for the conversation${NC}" >&2
+        return 1
+    fi
+    
+    local conversation_id
+    conversation_id=$(get_current_conversation_id)
+    
+    if [ -z "$conversation_id" ]; then
+        echo -e "${RED}Error: No active conversation to save${NC}" >&2
+        return 1
+    fi
+    
+    # Update the title in metadata
+    local timestamp=$(date +%s)
+    local metadata
+    metadata=$(cat "$METADATA_FILE" 2>/dev/null || echo "{}")
+    metadata=$(echo "$metadata" | jq --arg id "$conversation_id" --arg title "$new_title" --argjson timestamp "$timestamp" \
+        '.[$id].title = $title | .[$id].updated = $timestamp')
+    echo "$metadata" > "$METADATA_FILE"
+    
+    echo -e "${GREEN}Saved conversation as: '$new_title'${NC}"
 }
 
 # Send message to OpenAI API
 send_message() {
     local message="$1"
     local history="$2"
+    
+    # If no current conversation, create one
+    local conversation_id
+    conversation_id=$(get_current_conversation_id)
+    
+    if [ -z "$conversation_id" ] || [ ! -f "$CONVERSATIONS_DIR/$conversation_id.json" ]; then
+        # Generate title from the first message
+        local auto_title
+        auto_title=$(generate_title_from_message "$message")
+        new_conversation "$auto_title"
+        # Reload history after creating new conversation
+        history=$(load_conversation_history)
+    fi
     
     # Add user message to history
     history=$(add_to_history "$history" "user" "$message")
@@ -151,13 +452,15 @@ send_message() {
             echo
             echo "$assistant_message"
             
-            # Show conversation length
+            # Show conversation info
             local length
             length=$(get_conversation_length "$history")
             if [ "$length" -gt 2 ]; then
                 local exchanges=$((length / 2))
+                local current_title
+                current_title=$(get_conversation_title "$(get_current_conversation_id)")
                 echo
-                echo -e "${BLUE}(Conversation has $exchanges exchanges)${NC}"
+                echo -e "${BLUE}(\"$current_title\" - $exchanges exchanges)${NC}"
             fi
             ;;
         401)
@@ -181,19 +484,24 @@ send_message() {
 show_usage() {
     echo "Usage:"
     echo "  chat \"your message here\"  - Send a message to ChatGPT"
-    echo "  chat new                  - Start a new conversation"
+    echo "  chat new [title]          - Start a new conversation with optional title"
+    echo "  chat list                 - List all previous conversations"
+    echo "  chat load <title/id>      - Load and continue a previous conversation"
+    echo "  chat save <title>         - Save current conversation with a new title"
     echo
     echo "Examples:"
     echo "  chat \"Hello, how are you?\""
     echo "  chat \"What's the weather like?\""
-    echo "  chat new"
+    echo "  chat new \"Python Help\""
+    echo "  chat list"
+    echo "  chat load \"Python Help\""
+    echo "  chat save \"My Important Chat\""
 }
 
 # Main function
 main() {
-    # Check dependencies and API key
+    # Check dependencies first
     check_dependencies
-    check_api_key
     
     # Parse command line arguments
     if [ $# -eq 0 ]; then
@@ -202,30 +510,71 @@ main() {
         exit 1
     fi
     
-    # Handle 'new' command
-    if [ "$1" == "new" ]; then
-        new_conversation
-        return 0
-    fi
+    local command="$1"
     
-    # Join all arguments as the message
-    local message="$*"
+    # Handle commands that don't require API key first
+    case "$command" in
+        "help"|"--help"|"-h")
+            show_usage
+            return 0
+            ;;
+    esac
     
-    if [ -z "$message" ]; then
-        echo -e "${RED}Error: Please provide a message to send.${NC}" >&2
-        show_usage >&2
-        exit 1
-    fi
+    # Now check API key for commands that need it
+    check_api_key
     
-    # Load conversation history
-    local history
-    history=$(load_conversation_history)
+    # Initialize chat-cli directory structure
+    init_chat_cli_dir
     
-    # Show thinking indicator
-    echo -e "${BLUE}Thinking...${NC}"
-    
-    # Send message to ChatGPT
-    send_message "$message" "$history"
+    # Handle different commands
+    case "$command" in
+        "new")
+            # Handle 'new' command with optional title
+            shift
+            local title="$*"
+            new_conversation "$title"
+            return 0
+            ;;
+        "list")
+            # Handle 'list' command
+            list_conversations
+            return 0
+            ;;
+        "load")
+            # Handle 'load' command
+            shift
+            local search_term="$*"
+            load_conversation "$search_term"
+            return 0
+            ;;
+        "save")
+            # Handle 'save' command
+            shift
+            local title="$*"
+            save_conversation_with_title "$title"
+            return 0
+            ;;
+        *)
+            # Default case - treat as message
+            local message="$*"
+            
+            if [ -z "$message" ]; then
+                echo -e "${RED}Error: Please provide a message to send.${NC}" >&2
+                show_usage >&2
+                exit 1
+            fi
+            
+            # Load conversation history
+            local history
+            history=$(load_conversation_history)
+            
+            # Show thinking indicator
+            echo -e "${BLUE}Thinking...${NC}"
+            
+            # Send message to ChatGPT
+            send_message "$message" "$history"
+            ;;
+    esac
 }
 
 # Run main function with all arguments
