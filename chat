@@ -12,8 +12,7 @@ METADATA_FILE="$CHAT_CLI_DIR/metadata.json"
 CURRENT_FILE="$CHAT_CLI_DIR/current"
 LEGACY_STATE_FILE="$HOME/.chat-cli-state.json"
 OPENAI_API_URL="https://api.openai.com/v1/responses"
-# Using a static model for consistency - gpt-4o-mini is a good balance of capability and cost
-MODEL="gpt-4o-mini"
+MODEL="gpt-4o"
 
 # Enable web search capability by default
 USE_WEB_SEARCH="1"
