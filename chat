@@ -11,8 +11,12 @@ CONVERSATIONS_DIR="$CHAT_CLI_DIR/conversations"
 METADATA_FILE="$CHAT_CLI_DIR/metadata.json"
 CURRENT_FILE="$CHAT_CLI_DIR/current"
 LEGACY_STATE_FILE="$HOME/.chat-cli-state.json"
-OPENAI_API_URL="https://api.openai.com/v1/chat/completions"
-MODEL="gpt-4.1-nano"
+OPENAI_API_URL="https://api.openai.com/v1/responses"
+# Using a static model for consistency - gpt-4o-mini is a good balance of capability and cost
+MODEL="gpt-4o-mini"
+
+# Enable web search capability by default
+USE_WEB_SEARCH="1"
 
 # Colors for output
 RED='\033[0;31m'
@@ -375,7 +379,7 @@ save_conversation_with_title() {
     echo -e "${GREEN}Saved conversation as: '$new_title'${NC}"
 }
 
-# Send message to OpenAI API
+# Send message to OpenAI Responses API
 send_message() {
     local message="$1"
     local history="$2"
@@ -394,17 +398,35 @@ send_message() {
     fi
     
     # Add user message to history
-    history=$(add_to_history "$history" "user" "$message")    
+    history=$(add_to_history "$history" "user" "$message")
+    
+    # Convert conversation history to a single input string
+    local input_text
+    input_text=$(echo "$history" | jq -r 'map("\(.role): \(.content)") | join("\n\n")')
+    
     # Prepare API request payload
     local payload
-
-    payload=$(jq -n \
-        --arg model "$MODEL" \
-        --argjson messages "$history" \
-        '{
-            model: $model,
-            messages: $messages,
-        }')
+    
+    if [ "$USE_WEB_SEARCH" = "1" ]; then
+        # Include web search tool if enabled
+        payload=$(jq -n \
+            --arg model "$MODEL" \
+            --arg input "$input_text" \
+            '{
+                model: $model,
+                input: $input,
+                tools: [{type: "web_search"}]
+            }')
+    else
+        # Basic payload without tools
+        payload=$(jq -n \
+            --arg model "$MODEL" \
+            --arg input "$input_text" \
+            '{
+                model: $model,
+                input: $input
+            }')
+    fi
     
     # Make API request
     local response
@@ -421,12 +443,29 @@ send_message() {
     # Handle different HTTP status codes
     case "$http_code" in
         200)
-            # Success - extract assistant's response
+            # Success - extract assistant's response from Responses API format
             local assistant_message
-            assistant_message=$(echo "$response_body" | jq -r '.choices[0].message.content')
             
-            if [ "$assistant_message" == "null" ] || [ -z "$assistant_message" ]; then
-                echo -e "${RED}Error: Invalid response from OpenAI API${NC}" >&2
+            # Parse nested message content structure from Responses API
+            assistant_message=$(echo "$response_body" | jq -r '
+                if has("output") then
+                    .output[] | 
+                    select(.type == "message") | 
+                    if has("content") then
+                        .content[] | 
+                        select(.type == "output_text") |
+                        .text
+                    else
+                        ""
+                    end
+                else 
+                    .output_text // ""
+                end
+            ')
+            
+            if [ -z "$assistant_message" ] || [ "$assistant_message" = "null" ]; then
+                echo -e "${RED}Error: Invalid response from OpenAI Responses API${NC}" >&2
+                echo "DEBUG RESPONSE: $response_body" >&2
                 exit 1
             fi
             
@@ -452,7 +491,7 @@ send_message() {
             fi
             ;;
         401)
-            echo -e "${RED}Error: Invalid OpenAI API key. Please check your OPENAI_API_KEY environment variable.${NC}" >&2
+            echo -e "${RED}Error: Invalid API key. Please check your OPENAI_API_KEY environment variable.${NC}" >&2
             exit 1
             ;;
         429)
@@ -462,7 +501,7 @@ send_message() {
         *)
             local error_message
             error_message=$(echo "$response_body" | jq -r '.error.message // "Unknown error"' 2>/dev/null || echo "Unknown error")
-            echo -e "${RED}Error: OpenAI API error (HTTP $http_code): $error_message${NC}" >&2
+            echo -e "${RED}Error: API error (HTTP $http_code): $error_message${NC}" >&2
             exit 1
             ;;
     esac
